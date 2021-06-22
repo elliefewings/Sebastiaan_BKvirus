@@ -1,0 +1,50 @@
+---
+author: "Eleanor Fewings"
+output: html_document
+---
+
+# start_section  
+
+```{r start_section}
+
+# Time stamp
+Sys.time()
+
+# Clean up
+rm(list=ls())
+
+# Load libraries
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(magrittr)
+
+
+#Set working dir
+setwd("C:/Users/ellie/Onedrive/Saez/BK_nephropathy/")
+
+
+```
+
+# Load expression tables
+```{r}
+
+ck273 <- read.table("control_data/CK273_Expression_table.tsv", sep='\t', header=TRUE, row.names = 1) %>% t()
+ck274 <- read.table("control_data/CK274_Expression_table.tsv", sep='\t', header=TRUE, row.names = 1) %>% t()
+ck275 <- read.table("control_data/CK275_Expression_table.tsv", sep='\t', header=TRUE, row.names = 1) %>% t()
+ck276 <- read.table("control_data/CK276_Expression_table.tsv", sep='\t', header=TRUE, row.names = 1) %>% t()
+ck277 <- read.table("control_data/CK277_Expression_table.tsv", sep='\t', header=TRUE, row.names = 1) %>% t()
+ck278 <- read.table("control_data/CK278_Expression_table.tsv", sep='\t', header=TRUE, row.names = 1) %>% t()
+
+viralchr <- "AB301093"
+
+ck273.count <- rowSums(ck273[,grepl(viralchr, colnames(ck273))]) %>% sum()
+ck274.count <- rowSums(ck274[,grepl(viralchr, colnames(ck274))]) %>% sum()
+ck275.count <- rowSums(ck275[,grepl(viralchr, colnames(ck275))]) %>% sum()
+ck276.count <- rowSums(ck276[,grepl(viralchr, colnames(ck276))]) %>% sum()
+ck277.count <- rowSums(ck277[,grepl(viralchr, colnames(ck277))]) %>% sum()
+ck278.count <- rowSums(ck278[,grepl(viralchr, colnames(ck278))]) %>% sum()
+
+
+```
+

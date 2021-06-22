@@ -1,0 +1,2 @@
+Name_sequence	Genome_length	Virus_name	Complete_segment_name
+AB301093.1	5141	BK_polyoma_virus	BK polyomavirus DNA, complete genome, isolate: LAB-22

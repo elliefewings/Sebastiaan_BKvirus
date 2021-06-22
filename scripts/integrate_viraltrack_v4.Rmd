@@ -1,0 +1,598 @@
+---
+author: "Eleanor Fewings"
+output: html_document
+---
+
+# start_section  
+```{r start_section}
+
+# Time stamp
+Sys.time()
+
+# Clean up
+rm(list=ls())
+
+# Load libraries
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(magrittr)
+library(Seurat)
+library(stringr)
+library(progeny)
+library(tibble)
+library(pheatmap)
+library(stringr)
+library(knitr)
+library(DoMultiBarHeatmap)
+library(fgsea)
+library(data.table)
+library(EnhancedVolcano)
+library(ggpubr)
+
+# Folders
+setwd("C:/Users/ellie/OneDrive/Saez/Sebastiaan_BK/")
+opts_knit$set(root.dir = 'C:/Users/ellie/OneDrive/Saez/Sebastiaan_BK/')
+
+# Source functions
+source("C:/Users/ellie/OneDrive/Saez/Sebastiaan_BK/scripts/source.R")
+
+
+```
+
+## Load data
+```{r load}
+
+#Load data
+data <- readRDS("CK226.rds")
+
+#Separate metadata for exploration
+metadata <- data@meta.data
+
+#Read viraltrack information
+vt <- read.table("viraltrack/AllFilteredBarcodes/Expression_table.tsv", sep="\t", stringsAsFactors = FALSE, header=TRUE, row.names=1) %>% t()
+
+#Summarise counts of viraltrack
+vtsum <- rowSums(vt[,1:3]) %>% as.data.frame()
+
+#Add a "-1" to barcodes to match cellranger barcodes
+row.names(vtsum) <- paste(row.names(vtsum), "-1", sep="")
+
+#Rename column
+colnames(vtsum) <- "VTsum"
+
+## Summary statistics
+#Maximum viral reads
+max(vtsum$.)
+
+#Number of cells with no viral reads
+sum(vtsum$. == 0)
+
+#Number of cells with viral reads
+sum(vtsum$. != 0)
+
+#Proportion of cells with viral reads
+sum(vtsum$. != 0)/nrow(vtsum)
+
+#Mean number of viral reads in cells with viral reads
+mean(vtsum[vtsum$. != 0,])
+
+#Merging vtsum to metadata
+metadata.vt <- merge(metadata, vtsum, by="row.names", all.x=TRUE)
+
+#Count number of cells with viral reads, without viral reads and those that weren't detected
+table(metadata.vt$VTsum, exclude = NULL)
+
+#Create binary
+metadata.vt$VTbin <- ifelse(is.na(metadata.vt$VTsum) | metadata.vt$VTsum == "0" , "No viral reads", "Viral reads")
+
+#Add rownames back (removed by merge)
+row.names(metadata.vt) <- metadata.vt$Row.names
+
+#Convert NA to 0
+metadata.vt$VTsum[is.na(metadata.vt$VTsum)] <- 0
+
+#Check rownames match original data order
+sum(row.names(metadata) != row.names(metadata.vt))
+
+#Add viral track data to seurat object
+data$VTsum <- metadata.vt$VTsum
+data$VTbin <- metadata.vt$VTbin
+
+#Cleanup
+rm(metadata.vt, vt, vtsum)
+
+```
+
+#Find background viral level
+```{r raw, eval = FALSE, echo = FALSE}
+
+#Read viraltrack information
+raw <- read.table("viraltrack/AllRawBarcodes/Expression_table.tsv", sep="\t", stringsAsFactors = FALSE, header=TRUE, row.names=1) %>% t()
+
+#Add a "-1" to barcodes to match cellranger barcodes
+row.names(raw) <- paste(row.names(raw), "-1", sep="")
+
+#Count raw cells
+nrow(raw)
+
+#Remove cells that are in metadata
+raw.filt <- raw[!row.names(raw) %in% row.names(metadata),]
+
+nrow(raw.filt)
+
+rawsum <- rowSums(raw.filt[,1:4]) %>% as.data.frame()
+
+## Summary statistics
+#Maximum viral reads
+max(rawsum$.)
+
+#Number of cells with no viral reads
+sum(rawsum$. == 0)
+
+#Number of cells with viral reads
+sum(rawsum$. != 0)
+
+#Proportion of cells with viral reads
+sum(rawsum$. != 0)/nrow(rawsum)
+
+#Mean number of viral reads in cells with viral reads
+mean(rawsum[rawsum$. != 0,])
+
+
+```
+
+
+
+#Relabel clusters
+```{r label}
+
+#Create list of new cluster labels
+label <- list("0" = "T-Lymphocytes",
+          "1"="T-Lymphocytes",
+          "2"="T-Lymphocytes",
+          "3"="B-Lymphocytes",
+          "4"="Endothelial cells",
+          "5"="Proximal tubular epithelium",
+          "6"="Macrophages",
+          "7"="NK-cells",
+          "8"="Distal tubular epithelium",
+          "9"="Fibroblasts/Pericytes",
+          "10"="Endothelial cells (glomerular)",
+          "11"="Plasmacells",
+          "12"="Intercalated cells/Collecting duct",
+          "13"="Podocytes")
+
+#Rename clusters
+data <- RenameIdents(data, label)
+
+#Store idents in metadata
+data$celltype <- Idents(data)
+
+#Plot
+DimPlot(data, reduction = "umap", label = TRUE)
+
+#Change identity to viral count
+Idents(data) <- "VTbin"
+
+#Plot
+DimPlot(data, reduction = "umap", label = FALSE, pt.size = 2, order = "Viral reads")
+
+
+```
+
+#Count proportions of infected and uninfected cells per cell type
+```{r prop}
+
+#recrete metadata
+metadata <- data@meta.data
+
+#Create count
+sum.vt <- metadata %>% add_count(seurat_clusters, VTbin)
+
+#Create percentage
+sum.vt <- sum.vt %>% group_by(seurat_clusters) %>% mutate(perc=n/length(seurat_clusters))
+
+#Create cluster-celltype column
+sum.vt$clusttype <- paste(sum.vt$seurat_clusters, sum.vt$celltype, sep="-")
+
+#Shorten and make unique
+sum.vt <- sum.vt %>% subset(select=c(VTbin, clusttype, perc, n)) %>% unique()
+
+#Plot bar graph (number infected)
+ggplot(sum.vt, aes(x=VTbin, y=n, fill=VTbin)) +
+  geom_bar(stat="identity") +
+  facet_wrap(~clusttype)
+
+#(Percentage infected)
+ggplot(sum.vt, aes(x=VTbin, y=perc, fill=VTbin)) +
+  geom_bar(stat="identity") +
+  facet_wrap(~clusttype)
+
+
+```
+
+
+#compare viral affected cells per cluster
+```{r de}
+
+#Compare markers per cluster
+response.0 <- subset(data, subset= seurat_clusters == 0) %>% FindMarkers(ident.1 = "Viral reads", ident.2 = "No viral reads", verbose = FALSE)
+response.1 <- subset(data, subset= seurat_clusters == 1) %>% FindMarkers(ident.1 = "Viral reads", ident.2 = "No viral reads", verbose = FALSE)
+response.2 <- subset(data, subset= seurat_clusters == 2) %>% FindMarkers(ident.1 = "Viral reads", ident.2 = "No viral reads", verbose = FALSE)
+response.3 <- subset(data, subset= seurat_clusters == 3) %>% FindMarkers(ident.1 = "Viral reads", ident.2 = "No viral reads", verbose = FALSE)
+response.4 <- subset(data, subset= seurat_clusters == 4) %>% FindMarkers(ident.1 = "Viral reads", ident.2 = "No viral reads", verbose = FALSE)
+response.5 <- subset(data, subset= seurat_clusters == 5) %>% FindMarkers(ident.1 = "Viral reads", ident.2 = "No viral reads", verbose = FALSE)
+response.6 <- subset(data, subset= seurat_clusters == 6) %>% FindMarkers(ident.1 = "Viral reads", ident.2 = "No viral reads", verbose = FALSE)
+response.7 <- subset(data, subset= seurat_clusters == 7) %>% FindMarkers(ident.1 = "Viral reads", ident.2 = "No viral reads", verbose = FALSE)
+response.8 <- subset(data, subset= seurat_clusters == 8) %>% FindMarkers(ident.1 = "Viral reads", ident.2 = "No viral reads", verbose = FALSE)
+#response.9 <- subset(data, subset= seurat_clusters == 9) %>% FindMarkers(ident.1 = "Viral reads", ident.2 = "No viral reads", verbose = FALSE)
+#response.10 <- subset(data, subset= seurat_clusters == 10) %>% FindMarkers(ident.1 = "Viral reads", ident.2 = "No viral reads", verbose = FALSE)
+#response.11 <- subset(data, subset= seurat_clusters == 11) %>% FindMarkers(ident.1 = "Viral reads", ident.2 = "No viral reads", verbose = FALSE)
+response.12 <- subset(data, subset= seurat_clusters == 12) %>% FindMarkers(ident.1 = "Viral reads", ident.2 = "No viral reads", verbose = FALSE)
+#response.13 <- subset(data, subset= seurat_clusters == 13) %>% FindMarkers(ident.1 = "Viral reads", ident.2 = "No viral reads", verbose = FALSE)
+
+#Add cluster label
+response.0$cluster <- "0"
+response.1$cluster <- "1"
+response.2$cluster <- "2"
+response.3$cluster <- "3"
+response.4$cluster <- "4"
+response.5$cluster <- "5"
+response.6$cluster <- "6"
+response.7$cluster <- "7"
+response.8$cluster <- "8"
+#response.9$cluster <- "9"
+#response.10$cluster <- "10"
+#response.11$cluster <- "11"
+response.12$cluster <- "12"
+#response.13$cluster <- "13"
+
+#Add gene column
+response.0$gene <- row.names(response.0)
+response.1$gene <- row.names(response.1)
+response.2$gene <- row.names(response.2)
+response.3$gene <- row.names(response.3)
+response.4$gene <- row.names(response.4)
+response.5$gene <- row.names(response.5)
+response.6$gene <- row.names(response.6)
+response.7$gene <- row.names(response.7)
+response.8$gene <- row.names(response.8)
+#response.9$gene <- row.names(response.9)
+#response.10$gene <- row.names(response.10)
+#response.11$gene <- row.names(response.11)
+response.12$gene <- row.names(response.12)
+#response.13$gene <- row.names(response.13)
+
+#Merge back results
+markers <- rbind(response.0, response.1, response.2, response.3, response.4, response.5, response.6, response.7, response.8, response.12)
+
+#Make volcano plot of all responses
+EnhancedVolcano(markers,
+    lab = markers$gene,
+    x = 'avg_log2FC',
+    y = 'p_val_adj')
+  
+#Clean up
+#rm(response.0, response.1, response.2, response.3, response.4, response.5, response.6, response.7, response.8, response.12)
+
+#select top 10 per cluster (and select significant only)
+top <- markers %>% filter(p_val_adj < 0.05) %>% group_by(cluster) %>% top_n(-8, p_val_adj) %>% top_n(8, avg_log2FC)
+
+#Plot
+DoMultiBarHeatmap(object = data, features = top$gene, group.by = "VTbin", additional.group.by = "seurat_clusters")
+
+#Write response files and per cluster volcanos
+responses <- list(response.0=response.0, 
+                  response.1=response.1, 
+                  response.2=response.2, 
+                  response.3=response.3, 
+                  response.4=response.4, 
+                  response.5=response.5, 
+                  response.6=response.6, 
+                  response.7=response.7, 
+                  response.8=response.8, 
+                  response.12=response.12)
+
+for (i in 1:length(responses)) {
+  #Select response file
+  response <- responses[i] %>% as.data.frame()
+  #Edit colnames
+  colnames(response) <- colnames(response) %>% sub(paste(names(responses)[i], ".", sep=""), "", .)
+  #Get cluster number
+  clust <- names(responses)[i] %>% sub("response.", "", .)
+  #Find celltype
+  type <- label[clust] %>% unlist() %>% sub("/", "_", .) %>% sub(" ", "_", .)
+  #Set csv file name
+  file <- paste("markergenes/cluster", clust, "_", type, ".csv", sep="")
+  #Write csv
+  #write.csv(response, file)
+  #Set pdf filename
+  pdfn <- paste("volcano/cluster", clust, "_", type, "volcano.pdf", sep="")
+  #Write volcano
+  pdf(file = pdfn, width = 10, height = 9)
+  print(EnhancedVolcano(response,
+    lab = response$gene,
+    x = 'avg_log2FC',
+    y = 'p_val_adj'))
+  dev.off()
+  }
+
+```
+
+#create heatmap of specific clusters
+```{r heatmap}
+
+#clusters to look at
+#0 and 1 - T Lymphocytes
+#11 - plasma cells
+#12 - intercalated cells
+#13 - podocytes
+#4 - endothelial
+#5 - proximal tubular epithelial cells
+#8 - distal tubular epithelial
+
+#Filter summary to find percentage of each celltype containing viral reads
+viral <- sum.vt %>% filter(VTbin == "Viral reads")
+
+#Find upper quartile
+quarts <- summary(viral$perc)[5]
+
+#Show clusters in upper quartile
+viral %>% filter(perc >= quarts)
+
+#Set cc as identity
+Idents(data) <- "VTbin"
+
+#Set cluster as metadata
+data$cluster <- data@meta.data$seurat_clusters
+
+#Cluster 0
+c0 <- subset(data, subset= cluster == 0)
+
+top.0 <- response.0[order(response.0$p_val_adj, response.0$avg_log2FC),][1:60,]
+
+DoMultiBarHeatmap(object = c0, features = top.0$gene, group.by = "VTbin", additional.group.by = "celltype")
+
+#Cluster 1
+c1 <- subset(data, subset= cluster == 1)
+
+top.1 <- response.1[order(response.1$p_val_adj, response.1$avg_log2FC),][1:60,]
+
+DoMultiBarHeatmap(object = c1, features = top.1$gene, group.by = "VTbin", additional.group.by = "celltype")
+
+
+#Cluster 4
+c4 <- subset(data, subset= cluster == 4)
+
+top.4 <- response.4[order(response.4$p_val_adj, response.4$avg_log2FC),][1:60,]
+
+DoMultiBarHeatmap(object = c4, features = top.4$gene, group.by = "VTbin", additional.group.by = "celltype")
+
+
+#Cluster 5
+c5 <- subset(data, subset= cluster == 5)
+
+top.5 <- response.5[order(response.5$p_val_adj, response.5$avg_log2FC),][1:60,]
+
+DoMultiBarHeatmap(object = c5, features = top.5$gene, group.by = "VTbin", additional.group.by = "celltype")
+
+#Cluster 8
+c6 <- subset(data, subset= cluster == 6)
+
+top.6 <- response.6[order(response.6$p_val_adj, response.6$avg_log2FC),][1:60,]
+
+DoMultiBarHeatmap(object = c6, features = top.6$gene, group.by = "VTbin", additional.group.by = "celltype")
+
+
+#Cluster 8
+c8 <- subset(data, subset= cluster == 8)
+
+top.8 <- response.8[order(response.8$p_val_adj, response.8$avg_log2FC),][1:60,]
+
+DoMultiBarHeatmap(object = c8, features = top.8$gene, group.by = "VTbin", additional.group.by = "celltype")
+
+#Cluster 12
+c12 <- subset(data, subset= cluster == 12)
+
+top.12 <- response.12[order(response.12$p_val_adj, response.12$avg_log2FC),][1:60,]
+
+DoMultiBarHeatmap(object = c12, features = top.12$gene, group.by = "VTbin", additional.group.by = "celltype")
+
+
+```
+
+#From Sebastiaan's email
+## Proximal tubular epithelial cells
+Infected cells should theoretically show:
+*TP53 increase
+Tap73 increase
+DNMT1 increase
+*CDKN1A decrease
+COLIVA1 decrease
+
+Senescent cells (or cells in a late stage of viral infection) should theoretically show:
+*CDKN1A increase 
+CDKN2A increase
+GLS1 increase
+E2F7 increase
+LMNB1 increase
+
+#Check downstream expression for other cluster
+```{r geneexpr_sets}
+
+g.list <- c("TP53", "Tap73", "DNMT1", "CDKN1A", "COLIVA1", "CDKN2A", "GLS1", "E2F7", "LMNB1")
+
+#Create scatter plots of expression in each gene for different clusters
+##C5
+expr.plot(5, g.list, pval=FALSE)
+
+##C8
+expr.plot(8, g.list, pval=FALSE)
+
+##C12
+expr.plot(12, g.list, pval=FALSE)
+
+#senescent genes
+senescent.g <- c("SIRT1",
+"BCL2",
+"AKT1",
+"VEGFA",
+"MCM7",
+"MTHFD2",
+"CDKN2B",
+"CCND1",
+"HDAC1",
+"E2F1",
+"E2F3",
+"CCNE1",
+"JUN",
+"PCNA",
+"SMAD3",
+"MAPK1",
+"SIRT6",
+"TGFB2",
+"SMAD1",
+"CDKN2C",
+"CCNE2",
+"TP63",
+"PRKDC",
+"RBL1",
+"MPAK3"
+)
+
+#Create scatter plots of expression in each gene for different clusters
+##C5
+expr.plot(5, senescent.g)
+
+##C8
+expr.plot(8, senescent.g)
+
+##C12
+expr.plot(12, senescent.g)
+
+#Create senescence score for all clusters
+score <- AddModuleScore(
+  object = data,
+  features = list(senescent.g),
+  ctrl = 5,
+  name = 'senes'
+)
+
+#Subset metadata with senescence scores
+score.meta <- score@meta.data
+
+#Plot histogram of senescence results
+ggplot(score.meta, aes(x=senes1)) +
+  geom_histogram()
+
+#Plot histogram of senes results colouring by infection with BK
+ggplot(score.meta, aes(x=senes1, fill=VTbin)) +
+  geom_histogram()
+
+#Plot histogram of senes results colouring by infection with BK
+ggplot(score.meta, aes(x=VTbin, y=senes1, fill=VTbin)) +
+  geom_boxplot() +
+  stat_compare_means(method = "t.test", label.y = 0.6) +
+  ggtitle("Comparison of senescence scores between virally infected cells and controls")
+
+#Compare senescence scores per cluster (writes to pdf)
+score.comparison(c5)
+
+score.comparison(c8)
+
+score.comparison(c12)
+
+```
+
+#Run GSEA
+```{r gsea}
+
+#Load genesets
+p53 <- read.table("genesets/p53.txt", sep="\t", skip=2, stringsAsFactors = FALSE, header=FALSE)
+g2m <- read.table("genesets/g2m.txt", sep="\t", skip=2, stringsAsFactors = FALSE, header=FALSE)
+pi3k <- read.table("genesets/pi3k.txt", sep="\t", skip=2, stringsAsFactors = FALSE, header=FALSE)
+tnfa <- read.table("genesets/tnfa.txt", sep="\t", skip=2, stringsAsFactors = FALSE, header=FALSE)
+
+#Cluster 5
+
+#p53
+p53.5 <- response.5[row.names(response.5) %in% p53$V1 & response.5$p_val_adj < 0.05,]
+DoMultiBarHeatmap(object = c5, features = p53$V1, group.by = "VTbin", additional.group.by = "celltype")
+
+#g2m
+g2m.5 <- response.5[row.names(response.5) %in% g2m$V1 & response.5$p_val_adj < 0.05,]
+DoMultiBarHeatmap(object = c5, features = g2m$V1, group.by = "VTbin", additional.group.by = "celltype")
+
+#pi3k
+pi3k.5 <- response.5[row.names(response.5) %in% pi3k$V1 & response.5$p_val_adj < 0.05,]
+DoMultiBarHeatmap(object = c5, features = pi3k$V1, group.by = "VTbin", additional.group.by = "celltype")
+
+#g2m
+tnfa.5 <- response.5[row.names(response.5) %in% tnfa$V1 & response.5$p_val_adj < 0.05,]
+DoMultiBarHeatmap(object = c5, features = tnfa$V1, group.by = "VTbin", additional.group.by = "celltype")
+
+
+
+```
+
+#GSEA averaging set
+```{r gsea_avg}
+
+#Plot average expression over gene sets
+gsea.expr.plot(5, p53$V1, "VTbin")
+gsea.expr.plot(5, g2m$V1, "VTbin")
+gsea.expr.plot(5, pi3k$V1, "VTbin")
+gsea.expr.plot(5, tnfa$V1, "VTbin")
+
+```
+
+#Run FGSEA
+```{r fgsea}
+
+#Select genes to run analysis
+bg.genes <- row.names(data)
+
+#DE clusters
+de.files <- list(response.0, response.1, response.2, response.3, response.4, response.5, response.6, response.7, response.8, response.12)
+
+for (file in de.files){
+  markers <- file[order(file$avg_log2FC, decreasing = TRUE),]
+  rownames(markers) <- markers$gene
+  
+  # Get cell type
+  clust <- unique(markers$cluster)
+  cell.type <- label[names(label) == clust] %>% unlist() %>% str_replace("/", "_") %>% str_replace(" ", "_")
+  cell.type <- paste(cell.type, paste0("cluster", clust), sep="_")
+  outdir <- "GSEA"
+  dir.create(outdir)
+  
+  # GSEA
+  stats <- markers$avg_log2FC
+  names(stats) <- rownames(markers)
+  stats <- stats[!is.na(stats)]
+  file.prefix <- paste('viral_vs_nonviral_', cell.type, sep="") 
+  
+  # GO
+  run_gsea(bg.genes = bg.genes, stats = stats, 
+           category = 'C5', subcategory = 'BP',
+           out.dir = outdir, plot.title = 'GO',
+           file.prefix = file.prefix)
+  
+  # PID
+  run_gsea(bg.genes = bg.genes, stats = stats, 
+           category = 'C2', subcategory = 'PID',
+           out.dir = outdir, plot.title = 'PID',
+           file.prefix = file.prefix)
+  
+  # Immunological signature
+  run_gsea(bg.genes = bg.genes, stats = stats, 
+           category = 'C7',
+           out.dir = outdir, plot.title = 'Immunological Signature',
+           file.prefix = file.prefix)
+}
+
+
+
+```
+

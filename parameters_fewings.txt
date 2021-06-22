@@ -1,0 +1,9 @@
+N_thread=1
+Output_directory="/net/data.isilon/ag-saez/bq_efewings/data/BK_virus/run_raw_features"
+Index_genome="/net/data.isilon/ag-saez/bq_efewings/data/BK_virus/indexFew"
+Viral_annotation_file="/net/data.isilon/ag-saez/bq_efewings/data/BK_virus/viral_annotation_file.txt"
+Name_run="CK226"
+Load_STAR_module=FALSE
+Load_samtools_module=FALSE
+Load_stringtie_module=FALSE
+Minimal_read_mapped=50
